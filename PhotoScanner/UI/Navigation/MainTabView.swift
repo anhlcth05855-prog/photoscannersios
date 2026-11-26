@@ -3,29 +3,34 @@ import SwiftUI
 public struct MainTabView: View {
     @State private var selectedTab: Int = 0
     @State private var showCameraModal: Bool = false
+    @State private var cameraInitialMode: CameraMode = .docs
     @EnvironmentObject var repository: ScanRepository
 
     public init() {}
 
     public var body: some View {
         ZStack(alignment: .bottom) {
-            TabView(selection: $selectedTab) {
-                HomeView(selectedTab: $selectedTab)
-                    .tag(0)
-
-                GalleryView()
-                    .tag(1)
-
-                // Placeholder for center camera button
-                Color.clear
-                    .tag(2)
-
-                GalleryView()
-                    .tag(3)
-
-                SettingsView()
-                    .tag(4)
+            Group {
+                switch selectedTab {
+                case 0:
+                    HomeView(selectedTab: $selectedTab) { mode in
+                        cameraInitialMode = mode
+                        showCameraModal = true
+                    }
+                case 1:
+                    GalleryView()
+                case 3:
+                    GalleryView(initialMultiSelect: true)
+                case 4:
+                    SettingsView()
+                default:
+                    HomeView(selectedTab: $selectedTab) { mode in
+                        cameraInitialMode = mode
+                        showCameraModal = true
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Custom Floating Bottom Navigation Bar (Matching Screenshot 2)
             HStack {
@@ -44,7 +49,10 @@ public struct MainTabView: View {
                 Spacer()
 
                 // Center Large Aperture Scan Button (Matching Screenshot 2)
-                Button(action: { showCameraModal = true }) {
+                Button(action: {
+                    cameraInitialMode = .docs
+                    showCameraModal = true
+                }) {
                     ZStack {
                         Circle()
                             .fill(Color(red: 0.20, green: 0.25, blue: 0.35))
@@ -94,7 +102,7 @@ public struct MainTabView: View {
             )
         }
         .fullScreenCover(isPresented: $showCameraModal) {
-            CameraView()
+            CameraView(initialMode: cameraInitialMode)
                 .environmentObject(repository)
         }
     }

@@ -8,9 +8,13 @@ public struct CameraView: View {
 
     @State private var showCropReview = false
     @State private var showPhotoPicker = false
+    @State private var showOptionsSheet = false
+    @State private var selectedRecentScan: ScanItem? = nil
     @State private var shutterScale: CGFloat = 1.0
 
-    public init() {}
+    public init(initialMode: CameraMode = .docs) {
+        _viewModel = StateObject(wrappedValue: CameraViewModel(initialMode: initialMode))
+    }
 
     public var body: some View {
         ZStack {
@@ -34,6 +38,7 @@ public struct CameraView: View {
             // Tap Focus Ring
             if let focusPt = viewModel.focusPoint {
                 FocusRingView(position: focusPt)
+                    .allowsHitTesting(false)
             }
 
             // Spirit Bubble Level for Flat Scanning
@@ -47,6 +52,36 @@ public struct CameraView: View {
                             .padding(.trailing, 20)
                             .padding(.bottom, 160)
                     }
+                }
+                .allowsHitTesting(false)
+            }
+
+            // Camera Permission Denied Fallback
+            if viewModel.cameraPermissionDenied {
+                VStack(spacing: 14) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.white.opacity(0.8))
+                    Text("Chưa có quyền truy cập Camera")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    Text("Hãy bật quyền Camera trong Cài Đặt hoặc chọn ảnh từ Thư viện bên dưới.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 36)
+                    #if canImport(UIKit)
+                    Button("Mở Cài Đặt") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color(red: 0.0, green: 0.9, blue: 0.46)))
+                    #endif
                 }
             }
 
@@ -97,7 +132,7 @@ public struct CameraView: View {
                     }
 
                     // Menu Options
-                    Button(action: {}) {
+                    Button(action: { showOptionsSheet = true }) {
                         Image(systemName: "ellipsis.circle")
                             .font(.system(size: 22))
                             .foregroundColor(.white)
@@ -202,13 +237,15 @@ public struct CameraView: View {
                         // Recent Scanned Thumbnail Shortcut
                         if let first = repository.scans.first,
                            let uiImg = repository.loadImageFromDisk(path: !first.enhancedImagePath.isEmpty ? first.enhancedImagePath : first.croppedImagePath) {
-                            Image(uiImage: uiImg)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 48, height: 48)
-                                .cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.6), lineWidth: 1.5))
-                                .clipped()
+                            Button(action: { selectedRecentScan = first }) {
+                                Image(uiImage: uiImg)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 48, height: 48)
+                                    .cornerRadius(12)
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.6), lineWidth: 1.5))
+                                    .clipped()
+                            }
                         } else {
                             Circle()
                                 .fill(Color.white.opacity(0.15))
@@ -251,11 +288,37 @@ public struct CameraView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showCropReview) {
+        .fullScreenCover(isPresented: $showCropReview, onDismiss: {
+            viewModel.capturedOriginalImage = nil
+        }) {
             if let img = viewModel.capturedOriginalImage {
                 CropReviewView(originalImage: img, isMultiMode: viewModel.isMultiMode)
                     .environmentObject(repository)
             }
+        }
+        .sheet(item: $selectedRecentScan) { item in
+            EditorView(scanItem: item)
+                .environmentObject(repository)
+        }
+        .actionSheet(isPresented: $showOptionsSheet) {
+            ActionSheet(
+                title: Text("Tùy chọn Camera"),
+                buttons: [
+                    .default(Text(viewModel.isAiLiveScannerOn ? "Tắt khung quét Laser" : "Bật khung quét Laser")) {
+                        viewModel.isAiLiveScannerOn.toggle()
+                    },
+                    .default(Text(viewModel.isLevelEnabled ? "Tắt thước cân bằng" : "Bật thước cân bằng")) {
+                        viewModel.isLevelEnabled.toggle()
+                    },
+                    .cancel(Text("Đóng"))
+                ]
+            )
+        }
+        .onAppear {
+            viewModel.checkPermissionAndSetupSession()
+        }
+        .onDisappear {
+            viewModel.stopSession()
         }
         .onChange(of: viewModel.capturedOriginalImage) { img in
             if img != nil {
@@ -271,17 +334,27 @@ import UIKit
 public struct CameraPreviewView: UIViewRepresentable {
     public let session: AVCaptureSession
 
-    public func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
+    public final class PreviewUIView: UIView {
+        public override class var layerClass: AnyClass {
+            AVCaptureVideoPreviewLayer.self
+        }
+
+        public var previewLayer: AVCaptureVideoPreviewLayer {
+            layer as! AVCaptureVideoPreviewLayer
+        }
+    }
+
+    public func makeUIView(context: Context) -> PreviewUIView {
+        let view = PreviewUIView()
+        view.backgroundColor = .black
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
         return view
     }
 
-    public func updateUIView(_ uiView: UIView, context: Context) {
-        if let layer = uiView.layer.sublayers?.first as? AVCaptureVideoPreviewLayer {
-            layer.frame = uiView.bounds
+    public func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
         }
     }
 }

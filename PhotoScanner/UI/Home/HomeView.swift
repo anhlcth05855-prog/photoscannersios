@@ -3,11 +3,25 @@ import SwiftUI
 public struct HomeView: View {
     @EnvironmentObject var repository: ScanRepository
     @Binding var selectedTab: Int
+    var onOpenCamera: ((CameraMode) -> Void)? = nil
     @State private var searchText = ""
+    @State private var showSearchBar = false
+    @State private var sortNewestFirst = true
+    @State private var showProAlert = false
     @State private var selectedScanForEditor: ScanItem?
 
-    public init(selectedTab: Binding<Int>) {
+    public init(selectedTab: Binding<Int>, onOpenCamera: ((CameraMode) -> Void)? = nil) {
         self._selectedTab = selectedTab
+        self.onOpenCamera = onOpenCamera
+    }
+
+    private var displayedScans: [ScanItem] {
+        let filtered = searchText.isEmpty ? repository.scans : repository.scans.filter {
+            $0.title.localizedCaseInsensitiveContains(searchText) ||
+            $0.year.localizedCaseInsensitiveContains(searchText) ||
+            $0.location.localizedCaseInsensitiveContains(searchText)
+        }
+        return sortNewestFirst ? filtered : filtered.reversed()
     }
 
     public var body: some View {
@@ -28,12 +42,12 @@ public struct HomeView: View {
                                     .foregroundColor(.black)
                             }
                             Spacer()
-                            Button(action: {}) {
+                            Button(action: { showSearchBar.toggle() }) {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 20))
                                     .foregroundColor(.black)
                             }
-                            Button(action: {}) {
+                            Button(action: { showProAlert = true }) {
                                 Image(systemName: "crown.fill")
                                     .font(.system(size: 22))
                                     .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.0))
@@ -41,6 +55,24 @@ public struct HomeView: View {
                         }
                         .padding(.horizontal, 20)
                         .padding(.top, 10)
+
+                        if showSearchBar {
+                            HStack {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundColor(.gray)
+                                TextField("Tìm tài liệu, ảnh cũ...", text: $searchText)
+                                    .font(.system(size: 14))
+                                if !searchText.isEmpty {
+                                    Button(action: { searchText = "" }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white).shadow(color: .black.opacity(0.04), radius: 4))
+                            .padding(.horizontal, 20)
+                        }
 
                         // CamScanner Promo Banner (Matching screenshot 2)
                         HStack(spacing: 12) {
@@ -69,7 +101,7 @@ public struct HomeView: View {
 
                             Spacer()
 
-                            Button(action: { selectedTab = 2 }) {
+                            Button(action: { onOpenCamera?(.docs) }) {
                                 Text("Quét Ngay")
                                     .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(.white)
@@ -85,13 +117,13 @@ public struct HomeView: View {
                         // Quick Action Tools Grid (Matching screenshot 2)
                         HStack(spacing: 16) {
                             ToolGridButton(icon: "sparkles.rectangle.stack.fill", title: "AI Scan", color: .orange) {
-                                selectedTab = 2
+                                onOpenCamera?(.docs)
                             }
                             ToolGridButton(icon: "qrcode.viewfinder", title: "Scan QR", color: .blue) {
-                                selectedTab = 2
+                                onOpenCamera?(.scanCode)
                             }
                             ToolGridButton(icon: "person.text.rectangle.fill", title: "ID Cards", color: .green) {
-                                selectedTab = 2
+                                onOpenCamera?(.docs)
                             }
                             ToolGridButton(icon: "scissors", title: "Split PDF", color: .purple) {
                                 selectedTab = 3
@@ -107,18 +139,18 @@ public struct HomeView: View {
                             Text("Recent")
                                 .font(.system(size: 17, weight: .bold))
                                 .foregroundColor(.black)
-                            Button(action: {}) {
+                            Button(action: { sortNewestFirst.toggle() }) {
                                 Image(systemName: "arrow.up.arrow.down")
                                     .font(.system(size: 14))
                                     .foregroundColor(.gray)
                             }
                             Spacer()
-                            Button(action: {}) {
+                            Button(action: { selectedTab = 1 }) {
                                 Image(systemName: "folder.badge.plus")
                                     .font(.system(size: 18))
                                     .foregroundColor(.gray)
                             }
-                            Button(action: {}) {
+                            Button(action: { selectedTab = 3 }) {
                                 Image(systemName: "ellipsis.circle")
                                     .font(.system(size: 18))
                                     .foregroundColor(.gray)
@@ -128,7 +160,7 @@ public struct HomeView: View {
                         .padding(.top, 8)
 
                         // Recent List or Empty State (Matching screenshot 2)
-                        if repository.scans.isEmpty {
+                        if displayedScans.isEmpty {
                             VStack(spacing: 14) {
                                 Image(systemName: "doc.text.magnifyingglass")
                                     .font(.system(size: 54))
@@ -137,7 +169,7 @@ public struct HomeView: View {
                                 Text("No Document Scanned Yet.")
                                     .font(.system(size: 15, weight: .medium))
                                     .foregroundColor(.gray)
-                                Button(action: { selectedTab = 2 }) {
+                                Button(action: { onOpenCamera?(.docs) }) {
                                     HStack {
                                         Image(systemName: "camera.fill")
                                         Text("Bắt Đầu Quét Ảnh Đầu Tiên")
@@ -151,22 +183,29 @@ public struct HomeView: View {
                                 .padding(.top, 10)
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.bottom, 60)
+                            .padding(.bottom, 100)
                         } else {
                             LazyVStack(spacing: 12) {
-                                ForEach(repository.scans) { item in
+                                ForEach(displayedScans) { item in
                                     ScanCardRow(item: item) {
                                         selectedScanForEditor = item
                                     }
                                 }
                             }
                             .padding(.horizontal, 20)
-                            .padding(.bottom, 80)
+                            .padding(.bottom, 100)
                         }
                     }
                 }
             }
             .navigationBarHidden(true)
+            .alert(isPresented: $showProAlert) {
+                Alert(
+                    title: Text("Photo Scanner Pro"),
+                    message: Text("Tất cả tính năng AI Scan, Khử Chói, Phục Hồi Màu và Xuất PDF đã được mở khóa miễn phí!"),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
             .sheet(item: $selectedScanForEditor) { item in
                 EditorView(scanItem: item)
                     .environmentObject(repository)

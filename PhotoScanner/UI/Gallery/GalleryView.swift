@@ -13,7 +13,9 @@ public struct GalleryView: View {
 
     private let filterChips = ["Tất cả", "Đã phục hồi AI", "Có kỷ niệm", "Thập niên 70s-80s", "Thập niên 90s-2000s"]
 
-    public init() {}
+    public init(initialMultiSelect: Bool = false) {
+        _isMultiSelectMode = State(initialValue: initialMultiSelect)
+    }
 
     public var filteredScans: [ScanItem] {
         repository.scans.filter { item in

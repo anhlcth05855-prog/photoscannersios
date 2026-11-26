@@ -47,43 +47,90 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
     // Continuous counter
     @Published public var continuousPageCount: Int = 0
 
+    // Permission & Session state
+    @Published public var cameraPermissionDenied: Bool = false
+    @Published public var isSessionRunning: Bool = false
+
     // AVFoundation Session
     public let captureSession = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "com.photoscanner.camera.session")
     private var photoOutput = AVCapturePhotoOutput()
     private var activeDevice: AVCaptureDevice?
     private let motionManager = CMMotionManager()
+    private var isConfigured = false
 
-    public override init() {
+    public init(initialMode: CameraMode = .docs) {
+        self.currentMode = initialMode
         super.init()
-        setupSession()
+        checkPermissionAndSetupSession()
         startMotionTracking()
     }
 
-    public func setupSession() {
-        captureSession.beginConfiguration()
-        captureSession.sessionPreset = .photo
+    public func checkPermissionAndSetupSession() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            sessionQueue.async { [weak self] in
+                self?.configureAndStartSession()
+            }
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    self?.cameraPermissionDenied = !granted
+                }
+                if granted {
+                    self?.sessionQueue.async {
+                        self?.configureAndStartSession()
+                    }
+                }
+            }
+        case .denied, .restricted:
+            DispatchQueue.main.async {
+                self.cameraPermissionDenied = true
+            }
+        @unknown default:
+            break
+        }
+    }
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-              let input = try? AVCaptureDeviceInput(device: device) else {
+    private func configureAndStartSession() {
+        if !isConfigured {
+            captureSession.beginConfiguration()
+            captureSession.sessionPreset = .photo
+
+            if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+               let input = try? AVCaptureDeviceInput(device: device) {
+                self.activeDevice = device
+                if captureSession.canAddInput(input) {
+                    captureSession.addInput(input)
+                }
+            }
+
+            if captureSession.canAddOutput(photoOutput) {
+                captureSession.addOutput(photoOutput)
+                photoOutput.isHighResolutionCaptureEnabled = true
+            }
+
             captureSession.commitConfiguration()
-            return
+            isConfigured = true
         }
 
-        self.activeDevice = device
-
-        if captureSession.canAddInput(input) {
-            captureSession.addInput(input)
+        if !captureSession.isRunning {
+            captureSession.startRunning()
+            DispatchQueue.main.async {
+                self.isSessionRunning = self.captureSession.isRunning
+            }
         }
+    }
 
-        if captureSession.canAddOutput(photoOutput) {
-            captureSession.addOutput(photoOutput)
-            photoOutput.isHighResolutionCaptureEnabled = true
-        }
-
-        captureSession.commitConfiguration()
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.captureSession.startRunning()
+    public func stopSession() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+                DispatchQueue.main.async {
+                    self.isSessionRunning = false
+                }
+            }
         }
     }
 
@@ -110,9 +157,11 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
         case .off:
             flashMode = .auto
             isTorchOn = false
+            setTorch(enabled: false)
         case .auto:
             flashMode = .on
             isTorchOn = false
+            setTorch(enabled: false)
         case .on:
             flashMode = .off
             isTorchOn = true
@@ -140,22 +189,31 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
     }
 
     public func flipCamera() {
-        captureSession.beginConfiguration()
-        guard let currentInput = captureSession.inputs.first as? AVCaptureDeviceInput else { return }
-        captureSession.removeInput(currentInput)
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.captureSession.beginConfiguration()
+            guard let currentInput = self.captureSession.inputs.first as? AVCaptureDeviceInput else {
+                self.captureSession.commitConfiguration()
+                return
+            }
+            self.captureSession.removeInput(currentInput)
 
-        let newPosition: AVCaptureDevice.Position = currentInput.device.position == .back ? .front : .back
-        guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition),
-              let newInput = try? AVCaptureDeviceInput(device: newDevice) else {
-            captureSession.commitConfiguration()
-            return
-        }
+            let newPosition: AVCaptureDevice.Position = currentInput.device.position == .back ? .front : .back
+            guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition),
+                  let newInput = try? AVCaptureDeviceInput(device: newDevice) else {
+                if self.captureSession.canAddInput(currentInput) {
+                    self.captureSession.addInput(currentInput)
+                }
+                self.captureSession.commitConfiguration()
+                return
+            }
 
-        self.activeDevice = newDevice
-        if captureSession.canAddInput(newInput) {
-            captureSession.addInput(newInput)
+            self.activeDevice = newDevice
+            if self.captureSession.canAddInput(newInput) {
+                self.captureSession.addInput(newInput)
+            }
+            self.captureSession.commitConfiguration()
         }
-        captureSession.commitConfiguration()
     }
 
     public func focusAt(point: CGPoint, in viewSize: CGSize) {
@@ -179,13 +237,21 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
     }
 
     public func capturePhoto() {
+        guard let connection = photoOutput.connection(with: .video),
+              connection.isEnabled, connection.isActive else {
+            return
+        }
+
         if currentMode == .antiGlare && !isAntiGlareActive {
             startAntiGlareCapture()
             return
         }
 
         let settings = AVCapturePhotoSettings()
-        settings.flashMode = isTorchOn ? .off : flashMode
+        let desiredFlash: AVCaptureDevice.FlashMode = isTorchOn ? .off : flashMode
+        if photoOutput.supportedFlashModes.contains(desiredFlash) {
+            settings.flashMode = desiredFlash
+        }
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
