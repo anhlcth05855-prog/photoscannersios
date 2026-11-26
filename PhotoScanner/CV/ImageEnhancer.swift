@@ -122,7 +122,10 @@ public class ImageEnhancer {
             let row = y * bytesPerRow
             for x in 0..<width {
                 let off = row + x * bytesPerPixel
-                let lum = Int(0.299 * Double(ptr[off]) + 0.587 * Double(ptr[off + 1]) + 0.114 * Double(ptr[off + 2]))
+                let rLum: Double = 0.299 * Double(ptr[off])
+                let gLum: Double = 0.587 * Double(ptr[off + 1])
+                let bLum: Double = 0.114 * Double(ptr[off + 2])
+                let lum = Int(rLum + gLum + bLum)
                 hist[min(255, max(0, lum))] += 1
             }
         }
