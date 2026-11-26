@@ -1,19 +1,26 @@
 import SwiftUI
 import AVFoundation
 
+private struct CapturedImageItem: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 public struct CameraView: View {
-    @StateObject private var viewModel = CameraViewModel()
+    @StateObject private var viewModel: CameraViewModel
     @EnvironmentObject var repository: ScanRepository
     @Environment(\.presentationMode) var presentationMode
+    var onClose: (() -> Void)? = nil
 
-    @State private var showCropReview = false
+    @State private var cropReviewItem: CapturedImageItem? = nil
     @State private var showPhotoPicker = false
     @State private var showOptionsSheet = false
     @State private var selectedRecentScan: ScanItem? = nil
     @State private var shutterScale: CGFloat = 1.0
 
-    public init(initialMode: CameraMode = .docs) {
+    public init(initialMode: CameraMode = .docs, onClose: (() -> Void)? = nil) {
         _viewModel = StateObject(wrappedValue: CameraViewModel(initialMode: initialMode))
+        self.onClose = onClose
     }
 
     public var body: some View {
@@ -23,12 +30,10 @@ public struct CameraView: View {
             // Live Camera Preview Feed
             CameraPreviewView(session: viewModel.captureSession)
                 .ignoresSafeArea()
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onEnded { value in
-                            viewModel.focusAt(point: value.location, in: UIScreen.main.bounds.size)
-                        }
-                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.focusAt(point: CGPoint(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY), in: UIScreen.main.bounds.size)
+                }
 
             // Live Animated Laser Scanner Overlay
             if viewModel.isAiLiveScannerOn {
@@ -99,11 +104,17 @@ public struct CameraView: View {
 
             // Top Toolbar (Matching Screenshot 1)
             VStack {
-                HStack(spacing: 24) {
-                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                HStack(spacing: 12) {
+                    Button(action: {
+                        viewModel.stopSession()
+                        onClose?()
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
                         Image(systemName: "arrow.left")
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
 
                     Spacer()
@@ -122,6 +133,8 @@ public struct CameraView: View {
                                     .offset(x: 4, y: 4)
                             }
                         }
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                     }
 
                     // Flip Camera
@@ -129,6 +142,8 @@ public struct CameraView: View {
                         Image(systemName: "camera.rotate.fill")
                             .font(.system(size: 20))
                             .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
 
                     // Menu Options
@@ -136,10 +151,12 @@ public struct CameraView: View {
                         Image(systemName: "ellipsis.circle")
                             .font(.system(size: 22))
                             .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
 
                 // Single / Multi Pill Switcher (Matching Screenshot 1)
                 HStack(spacing: 0) {
@@ -216,10 +233,10 @@ public struct CameraView: View {
 
                         // Center Glowing Shutter Button (Matching Screenshot 1)
                         Button(action: {
+                            viewModel.capturePhoto()
                             withAnimation(.easeInOut(duration: 0.1)) { shutterScale = 0.88 }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                                 withAnimation(.easeOut(duration: 0.15)) { shutterScale = 1.0 }
-                                viewModel.capturePhoto()
                             }
                         }) {
                             ZStack {
@@ -232,6 +249,7 @@ public struct CameraView: View {
                                     .frame(width: 58, height: 58)
                             }
                             .scaleEffect(shutterScale)
+                            .contentShape(Circle())
                         }
 
                         // Recent Scanned Thumbnail Shortcut
@@ -288,13 +306,11 @@ public struct CameraView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showCropReview, onDismiss: {
+        .fullScreenCover(item: $cropReviewItem, onDismiss: {
             viewModel.capturedOriginalImage = nil
-        }) {
-            if let img = viewModel.capturedOriginalImage {
-                CropReviewView(originalImage: img, isMultiMode: viewModel.isMultiMode)
-                    .environmentObject(repository)
-            }
+        }) { item in
+            CropReviewView(originalImage: item.image, isMultiMode: viewModel.isMultiMode)
+                .environmentObject(repository)
         }
         .sheet(item: $selectedRecentScan) { item in
             EditorView(scanItem: item)
@@ -321,8 +337,8 @@ public struct CameraView: View {
             viewModel.stopSession()
         }
         .onChange(of: viewModel.capturedOriginalImage) { img in
-            if img != nil {
-                showCropReview = true
+            if let img = img {
+                cropReviewItem = CapturedImageItem(image: img)
             }
         }
     }

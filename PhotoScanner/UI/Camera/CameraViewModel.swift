@@ -238,7 +238,7 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
 
     public func capturePhoto() {
         guard let connection = photoOutput.connection(with: .video),
-              connection.isEnabled, connection.isActive else {
+              connection.isEnabled else {
             return
         }
 
@@ -247,6 +247,8 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
             return
         }
 
+        isProcessing = true
+        processingMessage = "Đang chụp ảnh..."
         let settings = AVCapturePhotoSettings()
         let desiredFlash: AVCaptureDevice.FlashMode = isTorchOn ? .off : flashMode
         if photoOutput.supportedFlashModes.contains(desiredFlash) {
@@ -292,39 +294,46 @@ public class CameraViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureD
     public func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         guard error == nil, let data = photo.fileDataRepresentation(),
               let image = UIImage(data: data) else {
-            isProcessing = false
+            DispatchQueue.main.async {
+                self.isProcessing = false
+            }
             return
         }
 
-        if currentMode == .antiGlare {
-            if antiGlareBaseImage == nil {
-                antiGlareBaseImage = image
-                isProcessing = false
-                isAntiGlareActive = true
-            } else {
-                antiGlareAngledImages.append(image)
-            }
-        } else if currentMode == .continuous {
-            // Instant auto-crop & add to album
-            continuousPageCount += 1
-            Task {
-                let quads = await ContourDetector().detectQuads(sourceImage: image, isMultiPhoto: true)
-                for q in quads {
-                    let cropped = PerspectiveWarper().warpPerspective(source: image, quad: q)
-                    let path = ScanRepository().saveImageToDisk(cropped, prefix: "continuous_page")
-                    let scanItem = ScanItem(
-                        originalImagePath: path,
-                        croppedImagePath: path,
-                        enhancedImagePath: path,
-                        title: "Trang Album #\(self.continuousPageCount)",
-                        quad: q
-                    )
-                    ScanRepository().addScan(scanItem)
+        DispatchQueue.main.async {
+            if self.currentMode == .antiGlare {
+                if self.antiGlareBaseImage == nil {
+                    self.antiGlareBaseImage = image
+                    self.isProcessing = false
+                    self.isAntiGlareActive = true
+                } else {
+                    self.antiGlareAngledImages.append(image)
                 }
+            } else if self.currentMode == .continuous {
+                self.isProcessing = false
+                self.continuousPageCount += 1
+                let pageNum = self.continuousPageCount
+                Task {
+                    let quads = await ContourDetector().detectQuads(sourceImage: image, isMultiPhoto: true)
+                    for q in quads {
+                        let cropped = PerspectiveWarper().warpPerspective(source: image, quad: q)
+                        let path = ScanRepository().saveImageToDisk(cropped, prefix: "continuous_page")
+                        let scanItem = ScanItem(
+                            originalImagePath: path,
+                            croppedImagePath: path,
+                            enhancedImagePath: path,
+                            title: "Trang Album #\(pageNum)",
+                            quad: q
+                        )
+                        await MainActor.run {
+                            ScanRepository().addScan(scanItem)
+                        }
+                    }
+                }
+            } else {
+                self.isProcessing = false
+                self.capturedOriginalImage = image
             }
-        } else {
-            self.capturedOriginalImage = image
-            self.isProcessing = false
         }
     }
 }

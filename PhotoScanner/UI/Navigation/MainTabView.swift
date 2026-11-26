@@ -102,8 +102,10 @@ public struct MainTabView: View {
             )
         }
         .fullScreenCover(isPresented: $showCameraModal) {
-            CameraView(initialMode: cameraInitialMode)
-                .environmentObject(repository)
+            CameraView(initialMode: cameraInitialMode) {
+                showCameraModal = false
+            }
+            .environmentObject(repository)
         }
     }
 }
